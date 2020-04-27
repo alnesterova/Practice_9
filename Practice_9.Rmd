@@ -1,0 +1,336 @@
+---
+title: "Упражнение 9"
+author: "Нестерова А.И."
+date: "26 04 2020"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Математическое моделирование
+
+### Машины опорных векторов
+
+## Упражнение 9
+
+Необходимо построить модель на основе SVM для указанной в варианте зависимой переменной.
+
+Данные взять из упражнения №3.
+
+Для модели:
+
+**1** Отложить 25% наблюдений в тестовую выборку (ядро генератора случайных чисел указано в варианте к упражнению №3).
+
+**2** На обучающей выборке (оставшихся 75% наблюдений) сравнить несколько видов ядер SVM по точности модели (AUC) методом сеточного поиска.
+
+**3** Для оптимальной формы ядерной функции на обучающей выборке подобрать оптимальное значение настроечных параметров по минимальной ошибке с перекрёстной проверкой (функция tune).
+
+**4** Подогнать лучшую модель на всей обучающей выборке. Построить ROC-кривую и рассчитать матрицу неточностей, чувствительность и специфичность.
+
+**5** Сделать прогноз по лучшей модели на тестовую выборку, оценить его качество точность по матрице неточностей, чувствительность и специфичность, построить ROC-кривую.
+
+**6** Сравнить результаты, которые дал SVM, с результатами, полученными в упражнении 3. Какой из методов оказался лучше?
+
+**Как сдавать:** прислать на почту преподавателя ссылки:
+* на html-отчёт с видимыми блоками кода (блоки кода с параметром echo = T), размещённый на [rpubs.com](rpubs.com).   
+* на код, генерирующий отчёт, в репозитории на [github.com](github.com).
+В текст отчёта включить постановку задачи и ответы на вопросы задания.  
+
+### Вариант - 13 (Упражнение 3)
+
+<tr>
+<td>13</td>
+<td>678</td>
+<td>Glass{mlbench} -- химический состав разных типов стекла</td>
+<td>Type 2</br>(1 -- наличие признака, все остальные -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, LDA</td>
+</tr>
+
+*Пакеты*: 
+
+```{r, message = F, warning = F}
+library('e1071')     # SVM
+library('ROCR')      # ROC-кривые
+library('mlbench')   # данные Glass
+library('ISLR')
+library('GGally')
+library('MASS')
+data(Glass)
+head(Glass)
+```
+
+Зададим ядро генератора случайных чисел и объём обучающей выборки.   
+
+```{r}
+my.seed <- 678        # ядро генерации
+train.percent <- 0.75 # доля обучающей выборки
+```
+
+Исходные данные: набор Glass (химический состав разных типов стекла).
+
+```{r}
+Type1 <- rep(0, length(Glass$Type)) # создание вектора Type1
+Glass <- cbind(Glass, Type1)        # присоединение Type1 к фрейму Glass
+
+# замена в переменной Type: если Type = 2 означает наличие признака (1), остальные - отсутствие(0)
+for(i in 1:length(Glass$Type)) {if (Glass$Type[i] == 2) {Glass$Type1[i] = 1}}
+
+# определение долей
+table(Glass$Type1) / sum(table(Glass$Type1))
+```
+
+Доля наименьшего класса, в данном случае 0.355, это ошибка нулевого классификатора: если бы мы прогнозировали Type = 2 для всех наблюдений, ровно в такой доле случаев мы бы ошиблись. Точность моделей целесообразно будет сравнивать с этой величиной.
+
+## Сеточный поиск
+
+```{r}
+# отбираем наблюдения в обучающую выборку 
+set.seed(my.seed)
+inTrain <- sample(seq_along(Glass$Type1),
+                  nrow(Glass)*train.percent)
+xtrain <- Glass[inTrain, c(-10, -11)]
+xtest <- Glass[-inTrain, c(-10, -11)]
+ytrain <- Glass[inTrain, 11]
+ytest <- Glass[-inTrain, 11]
+
+#обучающая выборка
+dat <- data.frame(x = xtrain, y = as.factor(ytrain))
+
+# тестовые данные
+dat.te <- data.frame(x = xtest, y = as.factor(ytest))
+
+# параметры алгоритма
+kernel.grid <- c('linear', 'polynomial')
+cost.grid <- seq(1, 20, by = 0.5)
+
+AUC <- matrix(0, length(kernel.grid), length(cost.grid))
+colnames(AUC) <- paste0('cost = ', cost.grid)
+rownames(AUC) <- paste0('kernel = ', kernel.grid)
+
+# SVM 
+for (i in 1:length(kernel.grid)) {
+    print(paste0('Starting ', kernel.grid[i], ' kernel'))
+    for (j in 1:length(cost.grid)) {
+        out <- svm(y ~ ., data = dat, kernel = kernel.grid[i], 
+                   cost = cost.grid[j])
+        # прогноз на тестовой выборке
+        pred.te <- predict(out, newdata = dat.te)
+        # матрица неточностей
+        tbl <- table(pred.te, dat.te$y)
+        AUC[i, j] <- sum(diag(tbl)) / sum(tbl)
+    }
+}
+
+round(AUC, 3)
+```
+
+Из полученных результатов видно, что оптимальной формой ядерной функции будет линейная модель.
+
+### Оптимальное значение настроечного параметра
+
+```{r}
+# классификатор на опорных векторах с линейной границей
+svmfit <- svm(y ~ ., data = dat, kernel = "linear", cost = 10, cale = FALSE)
+
+# список опорных векторов
+svmfit$index
+
+# сводка по модели
+summary(svmfit)
+
+# делаем перекрёстную проверку, изменяя штраф (аргумент cost)
+set.seed(my.seed)
+tune.out <- tune(svm, y ~ ., data = dat, kernel = "linear",
+                 ranges = list(cost = c(0.001, 0.1, 1, 5, 10, 100)))
+summary(tune.out)
+# по перекрестной проверке наилучший настроечный параметр cost =0.01
+```
+
+### Лучшая модель на всей обучающей выборке
+
+```{r}
+# лучшая модель -- с минимальной ошибкой
+bestmod <- tune.out$best.model
+summary(bestmod)
+
+# делаем прогноз по лучшей модели
+ypred_tr <- predict(bestmod, dat)
+
+# матрица неточностей
+tbl1 <- table(Predicts = ypred_tr, Fact = dat$y)
+tbl1
+
+# чувствительность
+TPR <- round(tbl1[2,2]/sum(tbl1[2,]),3)  
+TPR
+
+# специфичность
+SPC <- round(tbl1[1,1]/sum(tbl1[1,]),3)  
+SPC
+
+# функция построения ROC-кривой: pred -- прогноз, truth -- факт
+rocplot <- function(pred, truth, ...){
+    predob = prediction(pred, truth)
+    perf = performance(predob, "tpr", "fpr")
+    plot(perf,...)}
+
+# оптимальная модель
+svmfit.opt <- svm(y ~ ., data = dat, kernel = "linear",  cost = 0.01, probability = T)
+
+# матрица неточностей на обучающей (p = 0.01)
+table(Predicts = predict(svmfit.opt, dat), 
+             Fact = dat$y)
+
+# прогноз вероятностей, на основе которых присваивается класс
+fitted.prob <- predict(svmfit.opt, dat, type = "prob",  probability = TRUE)
+fitted.prob <- attr(fitted.prob, "probabilities")[, 2]
+
+# график для обучающей выборки
+# ROC-кривая для первой модели
+rocplot(fitted.prob, dat[, "y"], main = "Training Data")
+# прямая случайного классификатора
+abline(a = 0, b = 1, lty = 3, lwd = 2)
+```
+
+## Лучшая модель на тестовой выборке
+
+```{r}
+# график для тестовой выборки
+fitted.prob <- predict(svmfit.opt, dat.te, type = "prob",
+                       probability = TRUE)
+fitted.prob <- attr(fitted.prob, "probabilities")[, 2]
+
+# матрица неточностей на тестовой (p = 0.01)
+tbl2 <- table(Predicts = predict(svmfit.opt, dat.te), Fact = dat.te$y)
+tbl2
+
+# точность
+ACC <- round(sum(diag(tbl2))/sum(tbl2),3)  
+ACC
+
+# чувствительность
+TPR <- round(tbl2[2,2]/sum(tbl2[2,]),3)  
+TPR
+
+# специфичность
+SPC <- round(tbl2[1,1]/sum(tbl2[1,]),3)  
+SPC
+
+# ROC-кривая для тестовой выборки
+rocplot(fitted.prob, dat.te$y, main = "Test Data")
+# прямая случайного классификатора
+abline(a = 0, b = 1, lty = 3, lwd = 2)
+```
+
+Как видно из графиков ROC-кривых, и для обучающей, и для тестовой выборок значение AUC, менее 0,5, а значит классификатор действует с точностью до наооброт: если положительные классификации назвать отрицательными и наоборот, классификатор будет работать лучше. Учтём это при сравнении моделей на тестовой выборке.
+
+### Сравнение моделей (логистическая регрессия, LDA, SVM) на тестовой выборке
+
+```{r}
+# логистическая регрессия
+model.logit <- glm(y ~ ., data = dat, family = 'binomial')
+summary(model.logit)
+
+# прогноз: вероятности принадлежности классу Type = 2
+p.logit <- predict(model.logit, dat.te, 
+                  type = 'response')
+
+Forecast1 <- factor(ifelse(p.logit > 0.5, 2, 1),
+                  levels = c(1, 2),
+                  labels = c('0', '1'))
+
+# считаем 1-SPC и TPR для всех вариантов границы отсечения
+x1 <- NULL    # для (1 - SPC)
+y1 <- NULL    # для TPR
+
+# заготовка под матрицу неточностей
+tbl1 <- as.data.frame(matrix(rep(0, 4), 2, 2))
+rownames(tbl1) <- c('fact.0', 'fact.1')
+colnames(tbl1) <- c('predict.0', 'predict.1')
+
+# цикл по вероятностям отсечения
+for (p in seq(0, 1, length = 501)){
+    # прогноз
+    Forecast1 <- factor(ifelse(p.logit > p, 2, 1),
+                        levels = c(1, 2),
+                        labels = c('0', '1'))
+
+    # фрейм со сравнением факта и прогноза
+    df.compare <- data.frame(Fact = dat.te$y, Forecast = Forecast1)
+
+    # заполняем матрицу неточностей
+    tbl1[1, 1] <- nrow(df.compare[df.compare$Fact == '0' & df.compare$Forecast == '0', ])
+    tbl1[2, 2] <- nrow(df.compare[df.compare$Fact == '1' & df.compare$Forecast == '1', ])
+    tbl1[1, 2] <- nrow(df.compare[df.compare$Fact == '0' & df.compare$Forecast == '1', ])
+    tbl1[2, 1] <- nrow(df.compare[df.compare$Fact == '1' & df.compare$Forecast == '0', ])
+
+    # считаем характеристики
+    TPR <- tbl1[2, 2] / sum(tbl1[2, ])
+    y1 <- c(y1, TPR)
+    SPC <- tbl1[1, 1] / sum(tbl1[1, ])
+    x1 <- c(x1, 1 - SPC)}
+
+# LDA
+model.lda <- lda(y ~ ., data = dat)
+
+# прогноз: вероятности принадлежности классу Type = 2
+p.lda <- predict(model.lda, dat.te, type = 'response')
+
+x2 <- NULL    # для (1 - SPC)
+y2 <- NULL    # для TPR
+
+# заготовка под матрицу неточностей
+tbl2 <- as.data.frame(matrix(rep(0, 4), 2, 2))
+rownames(tbl2) <- c('fact.0', 'fact.1')
+colnames(tbl2) <- c('predict.0', 'predict.1')
+
+# цикл по вероятностям отсечения
+for (p in seq(0, 1, length = 501)){
+  # прогноз
+  Forecast2 <- factor(ifelse(p.lda$posterior[, '1'] > p, 2, 1),
+                      levels = c(1, 2),
+                      labels = c('0', '1'))
+  
+  # фрейм со сравнением факта и прогноза
+  df.compare <- data.frame(Fact = dat.te$y, Forecast = Forecast2)
+  
+  # заполняем матрицу неточностей
+  tbl2[1, 1] <- nrow(df.compare[df.compare$Fact == '0' & df.compare$Forecast == '0', ])
+  tbl2[2, 2] <- nrow(df.compare[df.compare$Fact == '1' & df.compare$Forecast == '1', ])
+  tbl2[1, 2] <- nrow(df.compare[df.compare$Fact == '0' & df.compare$Forecast == '1', ])
+  tbl2[2, 1] <- nrow(df.compare[df.compare$Fact == '1' & df.compare$Forecast == '0', ])
+  
+  # считаем характеристики
+  TPR <- tbl2[2, 2] / sum(tbl2[2, ])
+  y2 <- c(y2, TPR)
+  SPC <- tbl2[1, 1] / sum(tbl2[1, ])
+  x2 <- c(x2, 1 - SPC)
+}
+
+# строим ROC-кривую
+par(mar = c(5, 5, 1, 1))
+
+# кривая (логистическая регрессия)
+plot(x1, y1, type = 'l', col = 'blue', lwd = 3,
+     xlab = '(1 - SPC)', ylab = 'TPR', 
+     xlim = c(0, 1), ylim = c(0, 1), main = 'Тестовая выборка')
+
+# кривая (LDA)
+lines(x2, y2, type = 'l', col = 'red', lwd = 3)
+
+# кривая (SVM обр.)
+rocplot(-fitted.prob, dat.te$y, add=T, col = 'green')
+
+# прямая случайного классификатора
+abline(a = 0, b = 1, lty = 3, lwd = 2)
+
+# легенда
+legend('bottomright', names <-  c('Логист. кривая', 'LDA', 'SVM (обр.)'), lty = 1, col = c('blue', 'red', 'green'))
+```
+
+Сравнивая ROC-кривые, полученные на тестовой выборке, видно, что LDA-модель обладает большей предсказательной способностью, чем логистическая регрессия и SVM(обр.). 
